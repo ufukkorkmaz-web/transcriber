@@ -210,11 +210,12 @@
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 const $ = id => document.getElementById(id);
-const STORE_KEY = 'transcript-glossary-v2';
+const STORE_KEY = 'transcript-glossary-v3';
+const OLD_STORE_KEY = 'transcript-glossary-v2';
 
 const STARTER = `# Header and labels
 HATAY VALİLİĞİ = HATAY GOVERNORSHIP
-Arsuz / Özel Bilfen İskenderun Ortaokulu Müdürlüğü = Arsuz / Private Bilfen İskenderun Secondary Directorate
+Arsuz / Özel Bilfen İskenderun Ortaokulu Müdürlüğü = Arsuz / Private Bilfen Iskenderun College Secondary School Directorate
 ÖĞRENCİ NOTLARI LİSTESİ = LIST OF STUDENT’S GRADES
 Adı Soyadı = Name Surname
 Okul No = School Number
@@ -222,6 +223,10 @@ DERS ADI = LESSON
 DERS SAATİ = LESSON HOUR
 PUAN = SCORE
 ÇOK İYİ = VERY GOOD
+
+# School names (Turkish capitals give English capitals)
+ÖZEL BİLFEN İSKENDERUN İLKOKULU = PRIVATE BILFEN ISKENDERUN COLLEGE PRIMARY SCHOOL
+ÖZEL BİLFEN İSKENDERUN ORTAOKULU = PRIVATE BILFEN ISKENDERUN COLLEGE SECONDARY SCHOOL
 
 # Term, grade and class
 II. Dönem = TERM II
@@ -264,8 +269,24 @@ BİLİŞİM TEKNOLOJİLERİ VE YAZILIM = ICT
 TEKNOLOJİ VE TASARIM = TECHNOLOGY AND DESIGN
 T.C. İNKILAP TARİHİ VE ATATÜRKÇÜLÜK = REVOLUTION HISTORY AND KEMALISM`;
 
+// The starter list always wins for terms it contains; terms the person added themselves
+// (in the current or the previous saved list) are kept and appended at the end.
+function mergeCustom(saved) {
+  const keyOf = l => { const i = l.indexOf('='); return i < 1 ? null : l.slice(0, i).trim().replace(/[ıİI]/g, 'i').toLowerCase(); };
+  const have = new Set(STARTER.split(/\r?\n/).map(keyOf).filter(Boolean));
+  const extra = [];
+  for (const l of saved.split(/\r?\n/)) {
+    if (/^\s*#/.test(l)) continue;
+    const k = keyOf(l);
+    if (k && !have.has(k) && l.slice(l.indexOf('=') + 1).trim()) { extra.push(l.trim()); have.add(k); }
+  }
+  return extra.length ? STARTER + '\n\n# My own terms\n' + extra.join('\n') : STARTER;
+}
 function loadGlossary() {
-  try { const s = localStorage.getItem(STORE_KEY); if (s) return s; } catch (e) {}
+  try {
+    const cur = localStorage.getItem(STORE_KEY); if (cur) return cur;
+    const old = localStorage.getItem(OLD_STORE_KEY); if (old) return mergeCustom(old);
+  } catch (e) {}
   return STARTER;
 }
 function saveGlossary() {
