@@ -50,7 +50,7 @@
   .picked svg { flex:none; width:28px; height:28px; color:var(--ok); }
   .picked .nm { font-weight:600; overflow-wrap:anywhere; }
   .picked .sz { color:var(--muted); font-size:.85rem; }
-  .picked button { margin-left:auto; }
+  .picked .acts { margin-left:auto; display:flex; gap:2px; flex-wrap:wrap; justify-content:flex-end; }
 
   /* buttons */
   button { font:inherit; border:0; cursor:pointer; border-radius:10px; }
@@ -111,22 +111,25 @@
 <header class="hero"><div class="hero-in">
   <span class="pill">TR &rarr; EN</span>
   <h1>Transcriber</h1>
-  <p>Upload a Turkish Word transcript and get the English copy back with the layout, fonts and formatting untouched.</p>
+  <p>Upload a Turkish transcript (Word or PDF) and get the English copy back as a Word file with the layout, fonts and formatting untouched.</p>
 </div></header>
 
 <main>
   <section class="card" id="c1">
-    <div class="step-head"><div class="num">1</div><h2>Upload the Turkish transcript</h2><span class="tag">Word .docx</span></div>
+    <div class="step-head"><div class="num">1</div><h2>Upload the Turkish transcript</h2><span class="tag">.docx or .pdf</span></div>
     <label class="drop" id="drop">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-      <b>Drop your Word file here, or click to choose</b>
-      <span>Only .docx files. If you have a PDF, convert it to Word first.</span>
-      <input type="file" id="file" accept=".docx">
+      <b>Drop your Word or PDF file here, or click to choose</b>
+      <span>Word (.docx) or PDF. A PDF is converted to Word first, then translated.</span>
+      <input type="file" id="file" accept=".docx,.pdf">
     </label>
     <div class="picked" id="picked">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 14l2 2 4-4"/></svg>
       <div><div class="nm" id="fname"></div><div class="sz" id="fsize"></div></div>
-      <button class="link" id="change" type="button">Change file</button>
+      <div class="acts">
+        <button class="link hidden" id="convert" type="button">Convert to Word only</button>
+        <button class="link" id="change" type="button">Change file</button>
+      </div>
     </div>
   </section>
 
@@ -173,6 +176,7 @@
 <div class="footnote">Ufuk Korkmaz - 2026</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
@@ -249,9 +253,11 @@ $('toggle').addEventListener('click', () => {
 });
 
 // ---------- file picking ----------
-let file = null, outBlob = null, outName = 'transcript-EN.docx';
+let file = null, outBlob = null, outName = 'transcript-EN.docx', isPdf = false;
 function setFile(f) {
   file = f || null; outBlob = null;
+  isPdf = !!file && /\.pdf$/i.test(file.name);
+  $('convert').classList.toggle('hidden', !isPdf);
   $('result').classList.add('hidden');
   $('go').disabled = !file;
   $('picked').classList.toggle('show', !!file);
@@ -260,7 +266,8 @@ function setFile(f) {
   $('goHint').textContent = file ? 'Ready. Press Translate when the terms look right.' : 'Choose a file in step 1 to continue.';
   if (file) {
     $('fname').textContent = file.name;
-    $('fsize').textContent = file.size > 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(file.size / 1024)) + ' KB';
+    $('fsize').textContent = (file.size > 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(file.size / 1024)) + ' KB')
+      + (isPdf ? ' · PDF: it will be converted to Word first' : '');
   }
 }
 $('file').addEventListener('change', e => setFile(e.target.files[0]));
@@ -377,7 +384,165 @@ function processParagraph(p, pairs, opts, stats) {
   return changed;
 }
 
-const ICON_OK = '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>';
+// ---------- PDF -> Word ----------
+// Reads every piece of text with its position, size and font, then writes a Word file in which each
+// line is a paragraph with exact line height and tab stops at the original positions.
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+async function getPdfjs() {
+  for (let i = 0; i < 150; i++) {
+    if (window.pdfjsLib) {
+      const lib = window.pdfjsLib;
+      if (!lib.GlobalWorkerOptions.workerSrc) lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      return lib;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  throw new Error('Could not load the PDF reader. Check your internet connection and reload the page.');
+}
+const escXml = s => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function wordFont(real, serif) {
+  const n = (real || '').replace(/^[A-Z]{6}\+/, '');
+  if (/times/i.test(n)) return 'Times New Roman';
+  if (/arial|helvetica/i.test(n)) return 'Arial';
+  if (/courier/i.test(n)) return 'Courier New';
+  const flat = n.toLowerCase().replace(/[^a-z]/g, '');
+  for (const f of ['Calibri', 'Verdana', 'Tahoma', 'Cambria', 'Georgia', 'Segoe UI', 'Trebuchet MS'])
+    if (flat.includes(f.toLowerCase().replace(/[^a-z]/g, ''))) return f;
+  if (!n || /^g_d\d+_f\d+$/.test(n)) return serif ? 'Times New Roman' : 'Arial';
+  const base = n.split(/[-,]/)[0].replace(/(MT|PS)+$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  return base || (serif ? 'Times New Roman' : 'Arial');
+}
+
+async function readPdf(buf) {
+  const lib = await getPdfjs();
+  const pdf = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
+  const pages = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    try { await page.getOperatorList(); } catch (e) {}
+    const cache = {};
+    const fontOf = id => {
+      if (cache[id]) return cache[id];
+      let f = {}; try { f = page.commonObjs.get(id) || {}; } catch (e) {}
+      const real = String(f.name || '');
+      const fam = String((tc.styles[id] || {}).fontFamily || '');
+      return cache[id] = {
+        name: wordFont(real, /serif/i.test(fam) && !/sans/i.test(fam)),
+        bold: !!f.bold || /bold|black|heavy|semibold|demi/i.test(real),
+        italic: !!f.italic || /italic|oblique/i.test(real)
+      };
+    };
+    const its = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const t = it.transform;
+      its.push({ str: it.str, x: t[4], y: vp.height - t[5], w: it.width, size: Math.hypot(t[0], t[1]) || it.height || 10, font: fontOf(it.fontName) });
+    }
+    its.sort((p, q) => p.y - q.y || p.x - q.x);
+    const lines = [];
+    for (const it of its) {
+      const L = lines[lines.length - 1];
+      if (L && Math.abs(it.y - L.y) <= Math.max(2, it.size * 0.35)) L.items.push(it);
+      else lines.push({ y: it.y, items: [it] });
+    }
+    for (const L of lines) {
+      L.items.sort((p, q) => p.x - q.x);
+      const pieces = [];
+      const add = (pc, text, it) => {
+        const last = pc.runs[pc.runs.length - 1];
+        if (last && last.font === it.font && Math.abs(last.size - it.size) < 0.3) last.text += text;
+        else pc.runs.push({ text, font: it.font, size: it.size });
+      };
+      for (const it of L.items) {
+        const last = pieces[pieces.length - 1];
+        const gap = last ? it.x - last.right : 0;
+        if (last && gap < it.size * 0.4) {
+          if (gap > it.size * 0.12 && !/\s$/.test(last.runs[last.runs.length - 1].text) && !/^\s/.test(it.str)) add(last, ' ', it);
+          add(last, it.str, it); last.right = it.x + it.w;
+        } else {
+          const pc = { x: it.x, right: it.x + it.w, runs: [] };
+          add(pc, it.str, it); pieces.push(pc);
+        }
+      }
+      pieces.forEach(pc => { pc.text = pc.runs.map(r => r.text).join(''); pc.numeric = /\d/.test(pc.text) && /^[\d\s.,%\-\/:]+$/.test(pc.text); });
+      L.pieces = pieces;
+      L.size = Math.max(...pieces.flatMap(pc => pc.runs.map(r => r.size)));
+    }
+    pages.push({ w: vp.width, h: vp.height, lines });
+  }
+  return pages;
+}
+
+function buildDocx(pages) {
+  const all = pages.flatMap(p => p.lines.flatMap(l => l.pieces));
+  if (!all.length) throw new Error('This PDF has no selectable text (it is probably a scan), so it cannot be converted without OCR.');
+  const tw = pt => Math.round(pt * 20);
+  const leftMin = Math.min(...all.map(p => p.x));
+  const maxRight = Math.max(...all.map(p => p.right));
+
+  // Numbers that line up on their right edge (like hours) get right-aligned tabs; the rest are left-aligned.
+  const lc = {}, rc = {}, key = v => Math.round(v / 1.5);
+  all.filter(p => p.numeric).forEach(p => { lc[key(p.x)] = (lc[key(p.x)] || 0) + 1; rc[key(p.right)] = (rc[key(p.right)] || 0) + 1; });
+  const rightAligned = p => p.numeric && (rc[key(p.right)] || 0) > (lc[key(p.x)] || 0);
+
+  const pg = pages[0];
+  const topOf = l => { const h = Math.max(l.size, 1) * 1.2; return Math.max(0, l.y - h * 0.8); };
+  const globalTop = Math.min(...pages.filter(p => p.lines.length).map(p => topOf(p.lines[0])));
+  const bottomMargin = 5;
+
+  let body = '';
+  pages.forEach((page, pi) => {
+    let used = 0;
+    page.lines.forEach((line, i) => {
+      const next = page.lines[i + 1];
+      let h = next ? Math.max(next.y - line.y, line.size) : line.size * 1.25;
+      let before = 0;
+      if (i === 0) { before = Math.max(0, topOf(line) - globalTop); used = globalTop + before; }
+      if (!next) h = Math.max(line.size * 0.95, Math.min(h, page.h - bottomMargin - used));
+      used += h;
+
+      const stops = []; let runs = '';
+      line.pieces.forEach((pc, k) => {
+        const needTab = !(k === 0 && pc.x - leftMin < 1.5);
+        let first = true;
+        if (needTab) {
+          const right = rightAligned(pc);
+          const pos = tw((right ? pc.right : pc.x) - leftMin);
+          if (!stops.length || pos > stops[stops.length - 1].pos) stops.push({ val: right ? 'right' : 'left', pos });
+        }
+        pc.runs.forEach(r => {
+          const f = r.font, sz = Math.max(2, Math.round(r.size * 2));
+          runs += '<w:r><w:rPr><w:rFonts w:ascii="' + escXml(f.name) + '" w:hAnsi="' + escXml(f.name) + '" w:cs="' + escXml(f.name) + '" w:eastAsia="' + escXml(f.name) + '"/>'
+            + (f.bold ? '<w:b/><w:bCs/>' : '') + (f.italic ? '<w:i/><w:iCs/>' : '')
+            + '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/></w:rPr>'
+            + (first && needTab ? '<w:tab/>' : '') + '<w:t xml:space="preserve">' + escXml(r.text) + '</w:t></w:r>';
+          first = false;
+        });
+      });
+      body += '<w:p><w:pPr>' + (i === 0 && pi > 0 ? '<w:pageBreakBefore/>' : '')
+        + (stops.length ? '<w:tabs>' + stops.map(s => '<w:tab w:val="' + s.val + '" w:pos="' + s.pos + '"/>').join('') + '</w:tabs>' : '')
+        + '<w:spacing w:before="' + tw(before) + '" w:after="0" w:line="' + tw(h) + '" w:lineRule="exact"/></w:pPr>' + runs + '</w:p>';
+    });
+    if (!page.lines.length && pi > 0) body += '<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>';
+  });
+
+  const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS + '><w:body>' + body
+    + '<w:sectPr><w:pgSz w:w="' + tw(pg.w) + '" w:h="' + tw(pg.h) + '"/><w:pgMar w:top="' + tw(globalTop) + '" w:right="' + tw(Math.max(0, pg.w - maxRight - 2)) + '" w:bottom="' + tw(bottomMargin) + '" w:left="' + tw(leftMin) + '" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>';
+  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + NS + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/><w:sz w:val="20"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>';
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
+  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+  zip.file('word/document.xml', doc);
+  zip.file('word/styles.xml', styles);
+  return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+}
+async function pdfToDocxBuffer(buf) { return buildDocx(await readPdf(buf)); }
+
+const ICON_OK ='<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>';
 const ICON_ERR = '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.2v.1"/>';
 function head(ok, title, sub) {
   $('rhead').className = 'result-head' + (ok ? '' : ' err');
@@ -401,7 +566,9 @@ async function run() {
     if (!pairs.length) throw new Error('Your terms list is empty. Add lines like "MATEMATİK = MATHS".');
     const opts = { whole: $('whole').checked, caps: $('caps').checked };
 
-    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    let buf = await file.arrayBuffer();
+    if (isPdf) buf = await pdfToDocxBuffer(buf);
+    const zip = await JSZip.loadAsync(buf);
     const parts = Object.keys(zip.files).filter(n => /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n));
     if (!parts.includes('word/document.xml')) throw new Error('This does not look like a .docx file.');
 
@@ -425,14 +592,15 @@ async function run() {
     }
 
     outBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression: 'DEFLATE' });
-    outName = file.name.replace(/\.docx$/i, '') + '-EN.docx';
+    outName = file.name.replace(/\.(docx|pdf)$/i, '') + '-EN.docx';
 
     const total = pairs.reduce((s, [tr]) => s + (stats[tr] || 0), 0);
     const used = pairs.filter(([tr]) => stats[tr]), unused = pairs.filter(([tr]) => !stats[tr]);
     const list = Array.from(untouched.keys()).slice(0, 200);
 
     head(true, 'Done: ' + total + ' replacement' + (total === 1 ? '' : 's') + ' made.',
-      'Your English copy is ready. Have a quick look at the list below, then download it.');
+      isPdf ? 'Converted from PDF, then translated. Text, fonts and positions are kept; shading, lines and images are not. Check it before you download.'
+            : 'Your English copy is ready. Have a quick look at the list below, then download it.');
     const chips = $('chips');
     chips.append(chip('replacements', total), chip('terms used', used.length), chip('lines left as they were', list.length));
     $('c3').classList.add('done');
@@ -495,6 +663,21 @@ async function run() {
   }
 }
 
+$('convert').addEventListener('click', async () => {
+  const btn = $('convert'); btn.disabled = true; btn.textContent = 'Converting…';
+  try {
+    if (typeof JSZip === 'undefined') throw new Error('Could not load the zip library. Check your internet connection and reload the page.');
+    const out = await pdfToDocxBuffer(await file.arrayBuffer());
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+    a.download = file.name.replace(/\.pdf$/i, '') + '.docx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    $('goHint').textContent = 'Word copy downloaded. You can also press Translate to convert and translate in one go.';
+  } catch (err) {
+    $('goHint').textContent = 'Problem: ' + err.message;
+  } finally { btn.disabled = false; btn.textContent = 'Convert to Word only'; }
+});
 $('go').addEventListener('click', run);
 $('download').addEventListener('click', () => {
   if (!outBlob) return;
