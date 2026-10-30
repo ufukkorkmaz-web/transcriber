@@ -76,6 +76,9 @@
   .opts label { display:flex; gap:8px; align-items:flex-start; font-size:.92rem; max-width:340px; }
   .opts input { margin-top:5px; accent-color:var(--accent); }
   .editor .row { display:flex; justify-content:flex-end; margin-top:8px; }
+  .pdfopts { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  .pdfopts label { display:flex; gap:8px; align-items:flex-start; font-size:.92rem; }
+  .pdfopts input { margin-top:5px; accent-color:var(--accent); }
 
   /* result */
   .result-head { display:flex; gap:14px; align-items:center; padding:16px; border-radius:14px; background:var(--ok-soft); }
@@ -130,6 +133,9 @@
         <button class="link hidden" id="convert" type="button">Convert to Word only</button>
         <button class="link" id="change" type="button">Change file</button>
       </div>
+    </div>
+    <div class="pdfopts hidden" id="pdfopts">
+      <label><input type="checkbox" id="keepbg" checked><span>Keep logo, grey shading, lines and images (placed as a picture behind the text, so the text stays editable)</span></label>
     </div>
   </section>
 
@@ -258,6 +264,7 @@ function setFile(f) {
   file = f || null; outBlob = null;
   isPdf = !!file && /\.pdf$/i.test(file.name);
   $('convert').classList.toggle('hidden', !isPdf);
+  $('pdfopts').classList.toggle('hidden', !isPdf);
   $('result').classList.add('hidden');
   $('go').disabled = !file;
   $('picked').classList.toggle('show', !!file);
@@ -387,7 +394,10 @@ function processParagraph(p, pairs, opts, stats) {
 // ---------- PDF -> Word ----------
 // Reads every piece of text with its position, size and font, then writes a Word file in which each
 // line is a paragraph with exact line height and tab stops at the original positions.
+// Optionally, each page is also drawn WITHOUT its text (logo, grey shading, lines, images stay) and
+// placed as a full-page picture behind the text.
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const BG_SCALE = 2.5;   // background picture resolution (1 = 72 dpi, 2.5 = 180 dpi)
 async function getPdfjs() {
   for (let i = 0; i < 150; i++) {
     if (window.pdfjsLib) {
@@ -413,7 +423,25 @@ function wordFont(real, serif) {
   return base || (serif ? 'Times New Roman' : 'Arial');
 }
 
-async function readPdf(buf) {
+// Draws the page with all text switched off: only logos, pictures, shading, patterns and lines remain.
+async function renderBackground(page) {
+  const vp = page.getViewport({ scale: BG_SCALE });
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.ceil(vp.width));
+  cv.height = Math.max(1, Math.ceil(vp.height));
+  const ctx = cv.getContext('2d', { alpha: false });
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillText = function () {};
+  ctx.strokeText = function () {};
+  await page.render({ canvasContext: ctx, viewport: vp, background: '#ffffff' }).promise;
+  const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+  const data = await blob.arrayBuffer();
+  cv.width = cv.height = 1;
+  return data;
+}
+
+async function readPdf(buf, keepBg) {
   const lib = await getPdfjs();
   const pdf = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
   const pages = [];
@@ -470,9 +498,27 @@ async function readPdf(buf) {
       L.pieces = pieces;
       L.size = Math.max(...pieces.flatMap(pc => pc.runs.map(r => r.size)));
     }
-    pages.push({ w: vp.width, h: vp.height, lines });
+    let bg = null;
+    if (keepBg) { try { bg = await renderBackground(page); } catch (e) { console.warn('Background render failed on page ' + n, e); } }
+    pages.push({ w: vp.width, h: vp.height, lines, bg });
   }
   return pages;
+}
+
+// A full-page picture that sits behind the text, anchored to the page corner.
+function bgAnchor(pi, pageW, pageH) {
+  const cx = Math.round(pageW * 12700), cy = Math.round(pageH * 12700), id = pi + 1;
+  return '<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="' + (id) + '" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">'
+    + '<wp:simplePos x="0" y="0"/>'
+    + '<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>'
+    + '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+    + '<wp:extent cx="' + cx + '" cy="' + cy + '"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>'
+    + '<wp:docPr id="' + id + '" name="Page background ' + id + '"/><wp:cNvGraphicFramePr/>'
+    + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+    + '<pic:nvPicPr><pic:cNvPr id="' + id + '" name="bg' + id + '.png"/><pic:cNvPicPr/></pic:nvPicPr>'
+    + '<pic:blipFill><a:blip r:embed="rIdBg' + id + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+    + '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+    + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
 }
 
 function buildDocx(pages) {
@@ -488,22 +534,27 @@ function buildDocx(pages) {
   const rightAligned = p => p.numeric && (rc[key(p.right)] || 0) > (lc[key(p.x)] || 0);
 
   const pg = pages[0];
-  const topOf = l => { const h = Math.max(l.size, 1) * 1.2; return Math.max(0, l.y - h * 0.8); };
+  // With an "exact" line height, Word and LibreOffice put the baseline ASC (80%) of the way down the line box.
+  // So every line gets a normal height from its font size, and "space before" moves it so that its
+  // baseline lands exactly where it was in the PDF. (A line's height must NOT depend on the gap to the next line.)
+  const ASC = 0.8;
+  const natH = l => Math.max(4, l.size * 1.2);
+  const topOf = l => Math.max(0, l.y - ASC * natH(l));
   const globalTop = Math.min(...pages.filter(p => p.lines.length).map(p => topOf(p.lines[0])));
   const bottomMargin = 5;
 
   let body = '';
   pages.forEach((page, pi) => {
-    let used = 0;
+    let prevBottom = globalTop;
+    const bgRun = page.bg ? bgAnchor(pi, page.w, page.h) : '';
     page.lines.forEach((line, i) => {
-      const next = page.lines[i + 1];
-      let h = next ? Math.max(next.y - line.y, line.size) : line.size * 1.25;
-      let before = 0;
-      if (i === 0) { before = Math.max(0, topOf(line) - globalTop); used = globalTop + before; }
-      if (!next) h = Math.max(line.size * 0.95, Math.min(h, page.h - bottomMargin - used));
-      used += h;
+      let h = natH(line);
+      // if the previous line is too close, shrink this line's box instead of overlapping
+      h = Math.max(2, Math.min(h, (line.y - prevBottom) / ASC));
+      const before = Math.max(0, line.y - ASC * h - prevBottom);
+      prevBottom += before + h;
 
-      const stops = []; let runs = '';
+      const stops = []; let runs = i === 0 ? bgRun : '';
       line.pieces.forEach((pc, k) => {
         const needTab = !(k === 0 && pc.x - leftMin < 1.5);
         let first = true;
@@ -525,22 +576,35 @@ function buildDocx(pages) {
         + (stops.length ? '<w:tabs>' + stops.map(s => '<w:tab w:val="' + s.val + '" w:pos="' + s.pos + '"/>').join('') + '</w:tabs>' : '')
         + '<w:spacing w:before="' + tw(before) + '" w:after="0" w:line="' + tw(h) + '" w:lineRule="exact"/></w:pPr>' + runs + '</w:p>';
     });
-    if (!page.lines.length && pi > 0) body += '<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>';
+    if (!page.lines.length && pi > 0) body += '<w:p><w:pPr><w:pageBreakBefore/></w:pPr>' + bgRun + '</w:p>';
+    else if (!page.lines.length) body += '<w:p>' + bgRun + '</w:p>';
   });
 
   const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
-  const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS + '><w:body>' + body
+  const DOC_NS = NS + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+    + ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    + ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+  const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + DOC_NS + '><w:body>' + body
     + '<w:sectPr><w:pgSz w:w="' + tw(pg.w) + '" w:h="' + tw(pg.h) + '"/><w:pgMar w:top="' + tw(globalTop) + '" w:right="' + tw(Math.max(0, pg.w - maxRight - 2)) + '" w:bottom="' + tw(bottomMargin) + '" w:left="' + tw(leftMin) + '" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>';
   const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + NS + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/><w:sz w:val="20"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>';
+
+  const hasBg = pages.some(p => p.bg);
+  let rels = '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>';
   const zip = new JSZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
+  pages.forEach((p, pi) => {
+    if (!p.bg) return;
+    zip.file('word/media/bg' + (pi + 1) + '.png', p.bg);
+    rels += '<Relationship Id="rIdBg' + (pi + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/bg' + (pi + 1) + '.png"/>';
+  });
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (hasBg ? '<Default Extension="png" ContentType="image/png"/>' : '') + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
   zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+  zip.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + rels + '</Relationships>');
   zip.file('word/document.xml', doc);
   zip.file('word/styles.xml', styles);
   return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
 }
-async function pdfToDocxBuffer(buf) { return buildDocx(await readPdf(buf)); }
+async function pdfToDocxBuffer(buf, keepBg) { return buildDocx(await readPdf(buf, keepBg)); }
 
 const ICON_OK ='<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>';
 const ICON_ERR = '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.2v.1"/>';
@@ -565,9 +629,10 @@ async function run() {
     const pairs = parseGlossary($('glossary').value);
     if (!pairs.length) throw new Error('Your terms list is empty. Add lines like "MATEMATİK = MATHS".');
     const opts = { whole: $('whole').checked, caps: $('caps').checked };
+    const keepBg = $('keepbg').checked;
 
     let buf = await file.arrayBuffer();
-    if (isPdf) buf = await pdfToDocxBuffer(buf);
+    if (isPdf) buf = await pdfToDocxBuffer(buf, keepBg);
     const zip = await JSZip.loadAsync(buf);
     const parts = Object.keys(zip.files).filter(n => /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n));
     if (!parts.includes('word/document.xml')) throw new Error('This does not look like a .docx file.');
@@ -599,7 +664,8 @@ async function run() {
     const list = Array.from(untouched.keys()).slice(0, 200);
 
     head(true, 'Done: ' + total + ' replacement' + (total === 1 ? '' : 's') + ' made.',
-      isPdf ? 'Converted from PDF, then translated. Text, fonts and positions are kept; shading, lines and images are not. Check it before you download.'
+      isPdf ? (keepBg ? 'Converted from PDF, then translated. Text, fonts and positions are kept, and the logo, shading, lines and images are kept as a picture behind the text. Check it before you download.'
+                      : 'Converted from PDF, then translated. Text, fonts and positions are kept; shading, lines and images were left out. Check it before you download.')
             : 'Your English copy is ready. Have a quick look at the list below, then download it.');
     const chips = $('chips');
     chips.append(chip('replacements', total), chip('terms used', used.length), chip('lines left as they were', list.length));
@@ -667,7 +733,7 @@ $('convert').addEventListener('click', async () => {
   const btn = $('convert'); btn.disabled = true; btn.textContent = 'Converting…';
   try {
     if (typeof JSZip === 'undefined') throw new Error('Could not load the zip library. Check your internet connection and reload the page.');
-    const out = await pdfToDocxBuffer(await file.arrayBuffer());
+    const out = await pdfToDocxBuffer(await file.arrayBuffer(), $('keepbg').checked);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
     a.download = file.name.replace(/\.pdf$/i, '') + '.docx';
