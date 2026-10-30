@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transcriber</title>
+<style>
+  :root {
+    --bg:#f3f4f9; --card:#ffffff; --text:#1c2233; --muted:#667085; --line:#e4e7ef; --soft:#f6f7fb;
+    --accent:#4f46e5; --accent2:#0891b2; --accent-text:#ffffff; --accent-soft:#eceafd;
+    --ok:#117a4a; --ok-soft:#e5f6ec; --warn:#b54708; --warn-soft:#fff3e0;
+    --shadow:0 1px 2px rgba(20,25,50,.05), 0 8px 24px rgba(20,25,50,.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1219; --card:#181c27; --text:#e9ecf4; --muted:#9aa3b5; --line:#2a3042; --soft:#1e2331;
+      --accent:#8b8ff8; --accent2:#38bdf8; --accent-text:#0f1219; --accent-soft:#23264a;
+      --ok:#5fd39a; --ok-soft:#14291f; --warn:#fdb35c; --warn-soft:#2d2212;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+
+  .hero { background:linear-gradient(135deg,#dcdffd,#c9eef7); color:#141a2e; padding:36px 16px 84px; --title:#10162a; }
+  @media (prefers-color-scheme: dark) { .hero { background:linear-gradient(135deg,#23264a,#0f3a47); color:#e9ecf4; --title:#ffffff; } }
+  .hero-in { max-width:760px; margin:0 auto; }
+  .pill { display:inline-flex; gap:8px; align-items:center; background:rgba(79,70,229,.14); color:var(--accent); border-radius:999px; padding:4px 14px; font-weight:700; font-size:.85rem; letter-spacing:.04em; }
+  .hero h1 { margin:14px 0 6px; font-size:clamp(1.6rem,4.5vw,2.2rem); line-height:1.15; color:var(--title); }
+  .hero p { margin:0; opacity:.85; max-width:560px; }
+
+  main { max-width:760px; margin:-56px auto 0; padding:0 16px 56px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .step-head { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+  .num { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:grid; place-items:center; font-weight:800; }
+  .card.done .num { background:var(--ok-soft); color:var(--ok); }
+  .step-head h2 { margin:0; font-size:1.1rem; }
+  .step-head .tag { margin-left:auto; font-size:.82rem; color:var(--muted); }
+
+  /* upload */
+  .drop { display:flex; flex-direction:column; align-items:center; gap:6px; text-align:center; padding:28px 16px; border:2px dashed var(--line); border-radius:14px; background:var(--soft); cursor:pointer; transition:.15s; }
+  .drop:hover, .drop.over, .drop:focus-within { border-color:var(--accent); background:var(--accent-soft); }
+  .drop svg { width:40px; height:40px; color:var(--accent); }
+  .drop b { font-size:1.02rem; }
+  .drop span { color:var(--muted); font-size:.9rem; }
+  .drop input { position:absolute; width:1px; height:1px; opacity:0; }
+  .picked { display:none; align-items:center; gap:12px; padding:12px 14px; border-radius:12px; background:var(--ok-soft); color:var(--text); }
+  .picked.show { display:flex; }
+  .picked svg { flex:none; width:28px; height:28px; color:var(--ok); }
+  .picked .nm { font-weight:600; overflow-wrap:anywhere; }
+  .picked .sz { color:var(--muted); font-size:.85rem; }
+  .picked button { margin-left:auto; }
+
+  /* buttons */
+  button { font:inherit; border:0; cursor:pointer; border-radius:10px; }
+  .btn { background:var(--accent); color:var(--accent-text); font-weight:700; padding:13px 22px; box-shadow:0 2px 0 rgba(0,0,0,.12); }
+  .btn:hover:not(:disabled) { filter:brightness(1.08); }
+  .btn.big { width:100%; font-size:1.08rem; padding:15px 22px; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; box-shadow:none; }
+  .btn.ok { background:var(--ok); color:#fff; }
+  .link { background:transparent; color:var(--accent); font-weight:600; padding:6px 10px; font-size:.9rem; }
+  .link:hover { background:var(--accent-soft); }
+  :focus-visible { outline:3px solid var(--accent2); outline-offset:2px; }
+
+  /* terms */
+  .terms-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .count { display:inline-flex; align-items:center; gap:8px; font-weight:700; }
+  .count i { font-style:normal; background:var(--accent-soft); color:var(--accent); border-radius:999px; padding:2px 12px; }
+  .terms-bar .link { margin-left:auto; }
+  .muted { color:var(--muted); font-size:.9rem; margin:6px 0 0; }
+  .editor { display:none; margin-top:14px; }
+  .editor.show { display:block; }
+  textarea { width:100%; min-height:320px; font:13.5px/1.55 ui-monospace,Menlo,Consolas,monospace; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--soft); color:var(--text); resize:vertical; white-space:pre; overflow:auto; }
+  .opts { display:flex; gap:8px 22px; flex-wrap:wrap; margin-top:12px; }
+  .opts label { display:flex; gap:8px; align-items:flex-start; font-size:.92rem; max-width:340px; }
+  .opts input { margin-top:5px; accent-color:var(--accent); }
+  .editor .row { display:flex; justify-content:flex-end; margin-top:8px; }
+
+  /* result */
+  .result-head { display:flex; gap:14px; align-items:center; padding:16px; border-radius:14px; background:var(--ok-soft); }
+  .result-head svg { flex:none; width:40px; height:40px; color:var(--ok); }
+  .result-head.err { background:var(--warn-soft); } .result-head.err svg { color:var(--warn); }
+  .status { font-weight:700; font-size:1.05rem; }
+  .status.err { color:var(--warn); }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 4px; }
+  .chip { background:var(--soft); border:1px solid var(--line); border-radius:999px; padding:3px 12px; font-size:.86rem; color:var(--muted); }
+  .chip b { color:var(--text); }
+  details.sec { margin-top:12px; border:1px solid var(--line); border-radius:12px; background:var(--soft); }
+  details.sec > summary { cursor:pointer; font-weight:700; padding:12px 14px; list-style:none; display:flex; align-items:center; gap:8px; }
+  details.sec > summary::before { content:"▸"; color:var(--accent); transition:transform .15s; }
+  details.sec[open] > summary::before { transform:rotate(90deg); }
+  details.sec .body { padding:0 14px 14px; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+  td.n { text-align:right; white-space:nowrap; color:var(--muted); }
+  .pv { font-size:.9rem; padding:7px 0; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  .pv .b { color:var(--muted); text-decoration:line-through; }
+  .pv .a { color:var(--ok); font-weight:600; }
+  .rev { display:flex; justify-content:space-between; gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:.92rem; overflow-wrap:anywhere; }
+  .rev button { flex:none; background:var(--card); color:var(--accent); border:1px solid var(--line); padding:3px 12px; font-size:.82rem; font-weight:600; }
+  .rev button:disabled { opacity:.45; }
+  .hidden { display:none !important; }
+  footer { text-align:center; color:var(--muted); font-size:.82rem; padding:8px 16px 64px; }
+  .footnote { position:fixed; left:0; right:0; bottom:0; z-index:10; text-align:center; padding:9px 16px; font-size:.84rem; color:var(--muted); background:var(--card); border-top:1px solid var(--line); }
+  @media (max-width:520px) { .card { padding:16px; } .picked { flex-wrap:wrap; } .step-head .tag { display:none; } }
+</style>
+</head>
+<body>
+<header class="hero"><div class="hero-in">
+  <span class="pill">TR &rarr; EN</span>
+  <h1>Transcriber</h1>
+  <p>Upload a Turkish Word transcript and get the English copy back with the layout, fonts and formatting untouched.</p>
+</div></header>
+
+<main>
+  <section class="card" id="c1">
+    <div class="step-head"><div class="num">1</div><h2>Upload the Turkish transcript</h2><span class="tag">Word .docx</span></div>
+    <label class="drop" id="drop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <b>Drop your Word file here, or click to choose</b>
+      <span>Only .docx files. If you have a PDF, convert it to Word first.</span>
+      <input type="file" id="file" accept=".docx">
+    </label>
+    <div class="picked" id="picked">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 14l2 2 4-4"/></svg>
+      <div><div class="nm" id="fname"></div><div class="sz" id="fsize"></div></div>
+      <button class="link" id="change" type="button">Change file</button>
+    </div>
+  </section>
+
+  <section class="card" id="c2">
+    <div class="step-head"><div class="num">2</div><h2>Check the terms to change</h2></div>
+    <div class="terms-bar">
+      <span class="count"><i id="count">0</i> terms ready</span>
+      <button class="link" id="toggle" type="button">Edit list</button>
+    </div>
+    <p class="muted">Built from a real Turkish transcript and its English version: title, labels, grade and class lines, and lesson names. Names and school names are never changed.</p>
+    <div class="editor" id="editor">
+      <p class="muted" style="margin:0 0 8px">One per line: <b>Turkish = English</b>. Lines starting with # are notes. Longer phrases are matched first.</p>
+      <textarea id="glossary" spellcheck="false" wrap="off" aria-label="Terms to change"></textarea>
+      <div class="opts">
+        <label><input type="checkbox" id="whole" checked><span>Whole words only (a short term can't match inside a longer word)</span></label>
+        <label><input type="checkbox" id="caps" checked><span>If the Turkish is in CAPITALS, write the English in CAPITALS too</span></label>
+      </div>
+      <div class="row"><button class="link" id="reset" type="button">Reset to starter list</button></div>
+    </div>
+  </section>
+
+  <section class="card" id="c3">
+    <div class="step-head"><div class="num">3</div><h2>Translate and download</h2></div>
+    <button class="btn big" id="go" disabled>Translate</button>
+    <p class="muted" id="goHint">Choose a file in step 1 to continue.</p>
+
+    <div id="result" class="hidden" style="margin-top:16px">
+      <div class="result-head" id="rhead">
+        <svg id="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/></svg>
+        <div style="flex:1;min-width:0"><div id="status" class="status"></div><div class="muted" id="substatus" style="margin:2px 0 0"></div></div>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="btn big ok" id="download" disabled>Download English .docx</button></div>
+      <div class="chips" id="chips"></div>
+
+      <details class="sec" id="reviewWrap" open><summary>Text left as it was</summary><div class="body">
+        <p class="muted" style="margin:0 0 6px">Names, school names, numbers and addresses normally stay. If something here is Turkish that should change, click Add, fill in the English in the terms list, then Translate again.</p>
+        <div id="review"></div></div></details>
+      <details class="sec" id="prevWrap"><summary>What changed (before &rarr; after)</summary><div class="body"><div id="preview"></div></div></details>
+      <details class="sec" id="usedWrap"><summary>Terms used</summary><div class="body"><div id="summary"></div></div></details>
+    </div>
+  </section>
+</main>
+<footer>Everything runs in your browser. Your file never leaves your computer.</footer>
+<div class="footnote">Ufuk Korkmaz - 2026</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const XML_NS = 'http://www.w3.org/XML/1998/namespace';
+const $ = id => document.getElementById(id);
+const STORE_KEY = 'transcript-glossary-v2';
+
+const STARTER = `# Header and labels
+HATAY VALİLİĞİ = HATAY GOVERNORSHIP
+Arsuz / Özel Bilfen İskenderun Ortaokulu Müdürlüğü = Arsuz / Private Bilfen İskenderun Secondary Directorate
+ÖĞRENCİ NOTLARI LİSTESİ = LIST OF STUDENT’S GRADES
+Adı Soyadı = Name Surname
+Okul No = School Number
+DERS ADI = LESSON
+DERS SAATİ = LESSON HOUR
+PUAN = SCORE
+ÇOK İYİ = VERY GOOD
+
+# Term, grade and class
+II. Dönem = TERM II
+I. Dönem = TERM I
+1. Sınıf = 1st Grade
+2. Sınıf = 2nd Grade
+3. Sınıf = 3rd Grade
+4. Sınıf = 4th Grade
+5. Sınıf = 5th Grade
+6. Sınıf = 6th Grade
+7. Sınıf = 7th Grade
+8. Sınıf = 8th Grade
+9. Sınıf = 9th Grade
+10. Sınıf = 10th Grade
+11. Sınıf = 11th Grade
+12. Sınıf = 12th Grade
+A Şubesi = CLASS A
+B Şubesi = CLASS B
+C Şubesi = CLASS C
+D Şubesi = CLASS D
+E Şubesi = CLASS E
+F Şubesi = CLASS F
+
+# Lessons
+GÖRSEL SANATLAR = ARTS
+HAYAT BİLGİSİ = SOCIAL STUDIES
+MATEMATİK = MATHS
+MÜZİK = MUSIC
+OYUN VE FİZİKİ ETKİNLİKLER = GAME AND PHYSICAL ACTIVITIES
+BEDEN EĞİTİMİ VE OYUN = GAME AND PHYSICAL ACTIVITIES
+BEDEN EĞİTİMİ VE SPOR = PHYSICAL EDUCATION
+TÜRKÇE = TURKISH
+YABANCI DİL = FOREIGN LANGUAGE
+FEN BİLİMLERİ = NATURAL SCIENCE
+DİN KÜLTÜRÜ VE AHLAK BİLGİSİ = RELIGION
+İNSAN HAKLARI, YURTTAŞLIK VE DEMOKRASİ = HUMAN RIGHTS, CITIZENSHIP AND DEMOCRACY
+SOSYAL BİLGİLER = SOCIAL SCIENCE
+TRAFİK GÜVENLİĞİ (Trafik ve İlkyardım Eğitimi) = TRAFFIC SAFETY (Traffic and First Aid Training)
+BİLİŞİM TEKNOLOJİLERİ VE YAZILIM = ICT
+TEKNOLOJİ VE TASARIM = TECHNOLOGY AND DESIGN
+T.C. İNKILAP TARİHİ VE ATATÜRKÇÜLÜK = REVOLUTION HISTORY AND KEMALISM`;
+
+function loadGlossary() {
+  try { const s = localStorage.getItem(STORE_KEY); if (s) return s; } catch (e) {}
+  return STARTER;
+}
+function saveGlossary() {
+  try { localStorage.setItem(STORE_KEY, $('glossary').value); } catch (e) {}
+}
+function updateCount() { $('count').textContent = parseGlossary($('glossary').value).length; }
+
+$('glossary').value = loadGlossary();
+$('glossary').addEventListener('input', () => { saveGlossary(); updateCount(); });
+$('reset').addEventListener('click', () => { $('glossary').value = STARTER; saveGlossary(); updateCount(); });
+$('toggle').addEventListener('click', () => {
+  const ed = $('editor'); const open = ed.classList.toggle('show');
+  $('toggle').textContent = open ? 'Hide list' : 'Edit list';
+});
+
+// ---------- file picking ----------
+let file = null, outBlob = null, outName = 'transcript-EN.docx';
+function setFile(f) {
+  file = f || null; outBlob = null;
+  $('result').classList.add('hidden');
+  $('go').disabled = !file;
+  $('picked').classList.toggle('show', !!file);
+  $('drop').classList.toggle('hidden', !!file);
+  $('c1').classList.toggle('done', !!file);
+  $('goHint').textContent = file ? 'Ready. Press Translate when the terms look right.' : 'Choose a file in step 1 to continue.';
+  if (file) {
+    $('fname').textContent = file.name;
+    $('fsize').textContent = file.size > 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(file.size / 1024)) + ' KB';
+  }
+}
+$('file').addEventListener('change', e => setFile(e.target.files[0]));
+$('change').addEventListener('click', () => { $('file').value = ''; setFile(null); $('file').click(); });
+['dragenter', 'dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  try { const dt = new DataTransfer(); dt.items.add(f); $('file').files = dt.files; } catch (err) {}
+  setFile(f);
+});
+
+// ---------- translation engine ----------
+// Turkish-safe folding: I, İ and ı count as the same letter, case ignored. Keeps the text length unchanged.
+const fold = s => s.replace(/[ıİI]/g, 'i').toLowerCase();
+const isLetter = ch => !!ch && /\p{L}/u.test(ch);
+const isDigit = ch => !!ch && /\p{N}/u.test(ch);
+const hasLetter = s => /\p{L}/u.test(s);
+// A neighbouring letter always means "part of a longer word". A neighbouring digit only does
+// when the term itself starts/ends with a digit (so "1. Sınıf" can't match inside "11. Sınıf").
+const clash = (neighbour, edge) => isLetter(neighbour) || (isDigit(neighbour) && isDigit(edge));
+
+function parseGlossary(text) {
+  const pairs = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const i = line.indexOf('=');
+    if (i < 1) continue;
+    const tr = line.slice(0, i).trim(), en = line.slice(i + 1).trim();
+    if (tr && en) pairs.push([tr, en]);
+  }
+  pairs.sort((a, b) => b[0].length - a[0].length);
+  return pairs;
+}
+
+function ownerParagraph(n) {
+  let p = n.parentNode;
+  while (p && !(p.localName === 'p' && p.namespaceURI === W)) p = p.parentNode;
+  return p;
+}
+
+// The paragraph's pieces in reading order: text nodes (editable) plus tabs/line breaks (shown as a
+// separator so that "1<tab>ARTS" is read as two words, never as "1ARTS").
+function paragraphItems(p) {
+  const items = [];
+  for (const el of p.getElementsByTagNameNS(W, '*')) {
+    const name = el.localName;
+    if (name !== 't' && name !== 'tab' && name !== 'br' && name !== 'cr') continue;
+    if (ownerParagraph(el) !== p) continue;
+    if (name === 't') items.push({ node: el, edit: true });
+    else if (name !== 'tab' || el.parentNode.localName === 'r') items.push({ node: null, edit: false });
+  }
+  items.forEach(it => { it.text = it.edit ? it.node.textContent : '\t'; });
+  return items;
+}
+const plain = items => items.map(i => i.text).join('').replace(/\t+/g, ' ').trim();
+
+// Replaces terms inside one paragraph, even when a term is split over several formatted runs.
+function processParagraph(p, pairs, opts, stats) {
+  const items = paragraphItems(p);
+  if (!items.some(i => i.edit)) return false;
+  const before = plain(items);
+  let changed = false;
+
+  for (const [tr, en] of pairs) {
+    const texts = items.map(i => i.text);
+    const full = texts.join('');
+    const hay = fold(full), needle = fold(tr);
+    if (hay.length !== full.length || !needle) continue;
+
+    const matches = [];
+    let from = 0;
+    while (true) {
+      const idx = hay.indexOf(needle, from);
+      if (idx < 0) break;
+      const end = idx + needle.length;
+      const okL = !opts.whole || !clash(full[idx - 1], needle[0]);
+      const okR = !opts.whole || !clash(full[end], needle[needle.length - 1]);
+      if (okL && okR) { matches.push([idx, end]); from = end; } else from = idx + 1;
+    }
+    if (!matches.length) continue;
+
+    const starts = []; let pos = 0;
+    for (const t of texts) { starts.push(pos); pos += t.length; }
+    const newTexts = texts.slice();
+
+    for (let m = matches.length - 1; m >= 0; m--) {
+      const [s, e] = matches[m];
+      const orig = full.slice(s, e);
+      const rep = (opts.caps && hasLetter(orig) && orig === orig.toLocaleUpperCase('tr')) ? en.toUpperCase() : en;
+      let placed = false;
+      for (let k = 0; k < items.length; k++) {
+        const len = texts[k].length;
+        if (!len || !items[k].edit) continue;
+        const ns = starts[k], ne = ns + len;
+        if (ne <= s || ns >= e) continue;
+        const a = Math.max(s, ns) - ns, b = Math.min(e, ne) - ns;
+        newTexts[k] = newTexts[k].slice(0, a) + (placed ? '' : rep) + newTexts[k].slice(b);
+        placed = true;
+      }
+    }
+    items.forEach((it, k) => {
+      if (it.edit && newTexts[k] !== texts[k]) {
+        it.text = newTexts[k];
+        it.node.textContent = newTexts[k];
+        it.node.setAttributeNS(XML_NS, 'xml:space', 'preserve');
+      }
+    });
+    stats[tr] = (stats[tr] || 0) + matches.length;
+    changed = true;
+  }
+  if (changed) stats.__changed.push([before, plain(items)]);
+  return changed;
+}
+
+const ICON_OK = '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>';
+const ICON_ERR = '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.2v.1"/>';
+function head(ok, title, sub) {
+  $('rhead').className = 'result-head' + (ok ? '' : ' err');
+  $('ricon').innerHTML = ok ? ICON_OK : ICON_ERR;
+  $('status').className = 'status' + (ok ? '' : ' err');
+  $('status').textContent = title;
+  $('substatus').textContent = sub || '';
+}
+const chip = (label, value) => { const s = document.createElement('span'); s.className = 'chip'; s.innerHTML = '<b></b> '; s.firstChild.textContent = value; s.append(label); return s; };
+
+async function run() {
+  $('result').classList.remove('hidden');
+  $('download').disabled = true;
+  $('go').disabled = true; $('go').textContent = 'Working…';
+  head(true, 'Working…', '');
+  ['summary', 'preview', 'review', 'chips'].forEach(id => $(id).textContent = '');
+
+  try {
+    if (typeof JSZip === 'undefined') throw new Error('Could not load the zip library. Check your internet connection and reload the page.');
+    const pairs = parseGlossary($('glossary').value);
+    if (!pairs.length) throw new Error('Your terms list is empty. Add lines like "MATEMATİK = MATHS".');
+    const opts = { whole: $('whole').checked, caps: $('caps').checked };
+
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const parts = Object.keys(zip.files).filter(n => /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n));
+    if (!parts.includes('word/document.xml')) throw new Error('This does not look like a .docx file.');
+
+    const stats = { __changed: [] };
+    const untouched = new Map();
+
+    for (const name of parts) {
+      const xml = await zip.file(name).async('string');
+      const doc = new DOMParser().parseFromString(xml, 'application/xml');
+      if (doc.getElementsByTagName('parsererror').length) throw new Error('Could not read ' + name);
+      for (const p of Array.from(doc.getElementsByTagNameNS(W, 'p'))) {
+        const changed = processParagraph(p, pairs, opts, stats);
+        if (!changed) {
+          const t = plain(paragraphItems(p));
+          if (t && hasLetter(t)) untouched.set(t, true);
+        }
+      }
+      let out = new XMLSerializer().serializeToString(doc);
+      if (!out.startsWith('<?xml')) out = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + out;
+      zip.file(name, out);
+    }
+
+    outBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression: 'DEFLATE' });
+    outName = file.name.replace(/\.docx$/i, '') + '-EN.docx';
+
+    const total = pairs.reduce((s, [tr]) => s + (stats[tr] || 0), 0);
+    const used = pairs.filter(([tr]) => stats[tr]), unused = pairs.filter(([tr]) => !stats[tr]);
+    const list = Array.from(untouched.keys()).slice(0, 200);
+
+    head(true, 'Done: ' + total + ' replacement' + (total === 1 ? '' : 's') + ' made.',
+      'Your English copy is ready. Have a quick look at the list below, then download it.');
+    const chips = $('chips');
+    chips.append(chip('replacements', total), chip('terms used', used.length), chip('lines left as they were', list.length));
+    $('c3').classList.add('done');
+    $('goHint').textContent = 'Changed the terms list? Press Translate again to redo it.';
+
+    // Terms used / not used
+    const mk = (rows, withCount) => {
+      const t = document.createElement('table');
+      t.innerHTML = '<tr><th>Turkish</th><th>English</th>' + (withCount ? '<th class="n">Times</th>' : '') + '</tr>';
+      rows.forEach(([tr, en]) => {
+        const r = t.insertRow();
+        r.insertCell().textContent = tr;
+        r.insertCell().textContent = en;
+        if (withCount) { const c = r.insertCell(); c.className = 'n'; c.textContent = stats[tr]; }
+      });
+      return t;
+    };
+    const sum = $('summary');
+    if (used.length) sum.appendChild(mk(used, true)); else sum.textContent = 'No terms were found in this file.';
+    if (unused.length) {
+      const d = document.createElement('details'); d.style.marginTop = '12px';
+      const s = document.createElement('summary'); s.style.cursor = 'pointer'; s.textContent = 'Not in this file (' + unused.length + ')';
+      d.append(s, mk(unused, false)); sum.appendChild(d);
+    }
+
+    // Preview
+    const pv = $('preview');
+    stats.__changed.slice(0, 150).forEach(([b, a]) => {
+      const d = document.createElement('div'); d.className = 'pv';
+      const sb = document.createElement('span'); sb.className = 'b'; sb.textContent = b;
+      const sa = document.createElement('span'); sa.className = 'a'; sa.textContent = a;
+      d.append(sb, document.createTextNode('  →  '), sa);
+      pv.appendChild(d);
+    });
+    if (!stats.__changed.length) pv.textContent = 'Nothing was changed.';
+
+    // Text left alone
+    const rv = $('review');
+    list.forEach(t => {
+      const r = document.createElement('div'); r.className = 'rev';
+      const s = document.createElement('span'); s.textContent = t;
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Add';
+      b.addEventListener('click', () => {
+        const g = $('glossary');
+        g.value = g.value.replace(/\s*$/, '') + '\n' + t + ' = ';
+        saveGlossary(); updateCount();
+        $('editor').classList.add('show'); $('toggle').textContent = 'Hide list';
+        g.scrollIntoView({ block: 'center' }); g.focus(); g.setSelectionRange(g.value.length, g.value.length);
+        b.disabled = true;
+      });
+      r.append(s, b); rv.appendChild(r);
+    });
+    if (!list.length) rv.textContent = 'Nothing left over.';
+    $('download').disabled = false;
+    $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    head(false, 'Problem: ' + err.message, '');
+  } finally {
+    $('go').disabled = !file; $('go').textContent = 'Translate again';
+  }
+}
+
+$('go').addEventListener('click', run);
+$('download').addEventListener('click', () => {
+  if (!outBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(outBlob); a.download = outName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+updateCount();
+</script>
+</body>
+</html>
